@@ -1,0 +1,797 @@
+---
+title: "Data_Ingestion"
+author: "Emma King"
+date: "2025-04-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(basemaps)
+
+```
+
+
+
+# Importing county shapefile
+
+```{r}
+
+county <- st_read("C:/Users/jaria/Downloads/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized) (1)/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized).shp")
+
+county <- county[county$county == "Montgomery",]
+county <- st_transform(county, crs = 4326)
+
+```
+
+
+
+# Importing Capital Bikeshare datasets
+
+```{r}
+
+# The naming convention for tables in Capital Bikeshare's Index Bucket leads with the date in 'yyyymm' format.
+
+q <- 2019:2025  
+df <- cbind(yy = sort(rep(x=q, 12)), mm = rep(x=1:12, length(q))) |> as.data.frame()
+df$yymm <- df$yy*100 + df$mm
+
+# (1) the data for April 2020 is missing from their index; the csv in the zip file for April 2024 is mislabelled as 202004
+# (2) the table format changed significantly after March 2020 
+#     - most notably, there is no coordinate data available for months prior to May 2020
+
+df <- df[17:(nrow(df)-10), 3]    # changing project date range to May 2020 - Feb 2025
+
+a <- "https://s3.amazonaws.com/capitalbikeshare-data/"
+b <- "-capitalbikeshare-tripdata.zip"
+
+bucket <- paste0(a,df,b)
+bucket_dir <- paste0("./data/",df,b)
+```
+
+
+```{r}
+
+# dir.create("./data")
+download.file(bucket, bucket_dir, mode = "wb")
+
+file_name <- unzip(bucket_dir[1], exdir = "./data")
+trips <- read.csv(file_name[1])
+```
+
+
+```{r}
+
+# In my original approach, I iteratively unzipped and appended the monthly datasets, but that for-loop took 25 minutes to compile and it produced a dataframe with over 19 million observations. Writing the dataframe to a csv took 15 minutes. 
+
+# My alternative approach includes a for-loop that will likely take a long time to finish, but  will ultimately produce a much smaller dataframe since it will exclude trips that begin outside of Montgomery County (namely, those that begin in DC).
+
+
+trips <- trips |> filter(!is.na(start_lat))
+
+trips <- st_as_sf(trips, coords = c("start_lng", "start_lat"), remove = FALSE, crs = 4326)
+
+trips <- st_intersection(trips, county$geometry)
+
+
+for (i in 2:length(bucket)) {
+  
+  file_name <- unzip(bucket_dir[i], exdir = "./data")
+  add_trip <- read.csv(file_name[1])
+  
+  add_trip <- add_trip |> filter(!is.na(start_lat))
+  add_trip <- st_as_sf(add_trip, coords = c("start_lng", "start_lat"), remove = FALSE, crs = 4326)
+  add_trip <- st_intersection(add_trip, county$geometry)
+  
+  trips <- rbind(trips, add_trip)
+  
+  print(paste0("Progress: ", i, "/58"))
+} 
+
+
+# The for-loop took 35 minutes and trips ended up with 320,701 observations
+
+write.csv(trips,"./trips.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+# Tidying up the environment
+rm(a,b,i,q,df,file_name)
+```
+
+
+
+# Accessing trips.csv
+
+```{r, warning=FALSE}
+
+trips <- readr::read_csv("trips.csv")
+
+trips <- st_as_sf(trips, coords = c("start_lng", "start_lat"), remove = FALSE, crs = 4326)
+
+```
+
+
+
+# Correcting logical fallacies
+
+```{r}
+
+# Remove trips without destination coordinates (-1,057 obs)
+
+trips <- trips |> filter(!is.na(end_lat))
+
+```
+
+
+```{r}
+
+# Convert start and end times to POSIXt date-times
+
+trips$started_at <- as.POSIXct(trips$started_at, format = "%Y-%m-%d %H:%M:%S")
+trips$ended_at <- as.POSIXct(trips$ended_at, format = "%Y-%m-%d %H:%M:%S")
+
+
+# Calculate trip duration
+
+trips$duration <- difftime(trips$ended_at, trips$started_at, units = "mins")
+trips$duration <- as.numeric(trips$duration)
+
+# nrow(trips[trips$duration > 1440,]) 
+trips <- trips |> filter(duration > 0 & duration < 1440)
+# nrow(trips[trips$duration > 120,])/nrow(trips)  # ~2%
+ 
+```
+
+
+
+# Getting associated metro station
+
+```{r}
+
+# Retrieving shapefile
+
+metro_stop <- st_read("C:/Users/jaria/Downloads/Maryland_Transit_-_WMATA_Metro_Stops/Maryland_Transit_-_WMATA_Metro_Stops.shp")
+metro_stop <- metro_stop |> 
+  st_transform(crs = 4326)
+  st_crop(county) |>
+  filter(MetroLine == "red") |>
+  filter((OBJECTID != 32) & (OBJECTID != 84))
+
+metro_buff <- st_buffer(metro_stop, dist = units::set_units(0.5, "miles"))
+metro_buff <- metro_buff |> dplyr::select(OBJECTID, NAME, MetroLine, geometry)
+
+
+# Assigning a metro-buffer region to each trip's starting location
+
+trips <- st_join(trips, metro_buff)
+
+```
+
+
+```{r}
+
+# Correcting classes and distinguishing column names
+
+trips <- trips |> 
+  mutate(start_station_id = as.character(start_station_id),
+         end_station_id = as.character(end_station_id),
+         OBJECTID = as.character(OBJECTID)) 
+
+trips <- trips |>
+  rename(origin_id = OBJECTID,
+         origin_name = NAME,
+         origin_line = MetroLine)
+
+```
+
+
+```{r}
+
+# Excluding trips with destinations outside of Montgomery County (-91,949 obs)
+
+trips <- trips |>
+  st_drop_geometry() |>
+  st_as_sf(coords = c("end_lng", "end_lat"), remove = FALSE, crs = 4326) |>
+  st_intersection(county$geometry)
+
+
+# Assigning a metro-buffer region to each trip's ending location
+
+trips <- st_join(trips, metro_buff)
+
+
+# Distinguishing column names
+
+trips <- trips |> 
+  mutate(OBJECTID = as.character(OBJECTID)) |>
+  rename(dest_id = OBJECTID,
+         dest_name = NAME,
+         dest_line = MetroLine)
+
+```
+
+
+```{r}
+
+# Designate trip origin/destination as being inside/outside metro buffer region
+
+trips <- trips |>
+  mutate(origin_metro = ifelse(is.na(origin_id), "outside", "inside"),
+         dest_metro = ifelse(is.na(dest_id), "outside", "inside"))
+
+```
+
+
+
+# Biking Infrastructure
+
+```{r}
+
+# Importing Bicycle Stress Map Survey
+
+download.file("https://mcatlas.org/tiles6/00_Shapefiles/Transportation/Transportation_Master_Plan_Bicycle_Level_of_Traffic_Stress.zip","Transportation_Master_Plan_Bicycle_Level_of_Traffic_Stress.gdb.zip", mode="wb")
+
+unzip("Transportation_Master_Plan_Bicycle_Level_of_Traffic_Stress.gdb.zip", exdir = ".")
+
+bike_stress <- st_read("./Transportation_Master_Plan_Bicycle_Level_of_Traffic_Stress.gdb", 
+                       layer = "Bicycle_Level_of_Traffic_Stress_Planned")
+
+bike_stress <- st_transform(bike_stress, crs = 4326)
+
+```
+
+
+```{r}
+
+# Trimming the shapefile to exclude streets outside of a metro's half-mile buffer region
+
+bike_stress <- st_cast(bike_stress, "MULTILINESTRING")
+
+lts <- st_intersection(bike_stress, metro_buff)  
+
+
+# Get length of all streets within the buffer, then see what proportion of the total length is high stress
+
+lts <- lts |>
+  mutate(LTS = ifelse(grepl("High", LTS_TEXT), "High_Stress", "Low_Stress"),
+         LENGTH = st_length(Shape)) |>
+  group_by(NAME, LTS) |>
+  summarise(STREET_LENGTH = sum(LENGTH)) 
+
+metro_lts <- lts |>
+  st_drop_geometry() |>
+  spread(key = LTS, value = STREET_LENGTH) |>
+  mutate(PROP_LTS = High_Stress / (High_Stress + Low_Stress)) 
+  
+
+```
+
+```{r}
+
+# Mapping street stress in buffered regions
+
+ggplot() +
+  geom_sf(data = lts, aes(color = LTS)) +
+  geom_sf(data = lts[lts$LTS=="High_Stress",], color = "red") +
+  coord_sf() +
+  theme_light()
+
+```
+
+
+```{r}
+
+# Assessing relationship between traffic stress and trip frequency in a region
+
+metro_lts <- trips |>
+  st_drop_geometry() |>
+  group_by(origin_name) |>
+  summarise(N_TRIPS = n()) |>
+  rename(NAME = origin_name) |>
+  full_join(metro_lts, by = "NAME") |>
+  units::drop_units() |>
+  filter(!is.na(NAME))
+
+metro_lts |>
+  ggplot() +
+  geom_point(aes(x = PROP_LTS, y = N_TRIPS), size = 2) +
+  theme_light()
+
+
+# Linear regression
+
+lm(N_TRIPS~PROP_LTS, data = metro_lts) |> summary()
+
+# t-value   -0.035
+# r-squared -0.091
+# number of trips in a region is unrelated to the proportion of streets with high traffic stress
+
+```
+```{R}
+# Advice from Prof. Perrine:
+# I was too hasty in proceeding with linear regression; the first step should have been a correlation test 
+# (followed by another correlation test, but this time, excluding the two outliers with high N_TRIPS)
+
+cor.test(metro_lts$N_TRIPS, metro_lts$PROP_LTS, method = "pearson")
+
+# Results:
+# Pearson's product-moment correlation
+# 
+# data:  metro_lts$N_TRIPS and metro_lts$PROP_LTS
+# t = -0.034741, df = 11, p-value = 0.9729
+# alternative hypothesis: true correlation is not equal to 0
+# 95 percent confidence interval:
+#  -0.5582379  0.5436485
+# sample estimates:
+#         cor 
+# -0.01047424 
+
+
+cor.test(metro_lts$N_TRIPS[metro_lts$N_TRIPS < 20000], metro_lts$PROP_LTS[metro_lts$N_TRIPS < 20000], method = "pearson")
+
+# Results:
+# Pearson's product-moment correlation
+# 
+# data:  metro_lts$N_TRIPS[metro_lts$N_TRIPS < 20000] and metro_lts$PROP_LTS[metro_lts$N_TRIPS < 20000]
+# t = 1.1997, df = 9, p-value = 0.2609
+# alternative hypothesis: true correlation is not equal to 0
+# 95 percent confidence interval:
+#  -0.2940749  0.7942657
+# sample estimates:
+#       cor 
+# 0.3713006 
+
+```
+
+
+
+
+# Adding date-time details
+
+```{r}
+
+# Weekly Average Number of Trips
+
+trips |>
+  st_drop_geometry() |> 
+  mutate(year = year(started_at),
+         week = week(started_at)) |>
+  group_by(origin_name, year, week) |>
+  summarise(n_trips = n()) |>
+  group_by(origin_name, year) |>
+  summarise(weekly_avg = mean(n_trips)) |>
+  ggplot() +
+  geom_bar(aes(origin_name, weekly_avg, fill = as.factor(year)), 
+           stat = "identity", position = "dodge", color = "black") +
+  # scale_fill_brewer(palette="Set1") +
+  ggtitle("Average Number of Trips in a Week") +
+  xlab("Metro Region of Origin") +
+  ylab("Total Number of Trips") +
+  labs(fill = "Year") +
+  theme_light()
+
+```
+
+```{r}
+trips |>
+  st_drop_geometry() |> 
+  mutate(year = year(started_at),
+         week = week(started_at)) |>
+  filter((year != 2020) & (year != 2025)) |>
+  group_by(origin_name, year, week) |>
+  summarise(n_trips = n()) |>
+  ggplot() +
+  geom_boxplot(aes(x = origin_name, y = n_trips))
+
+  
+```
+
+
+
+```{r}
+
+# Hourly Distribution
+
+t <- trips |>
+  st_drop_geometry() |> 
+  mutate(time = hms::as_hms(started_at)) |>
+  mutate(time = as.POSIXct(time)) 
+
+hist(t$time, breaks = "hours")
+
+hist(t$time[t$origin_metro == "inside"], breaks = "hours",
+     main = "Start Time of Trips Initiated Near a Metro Station",
+     xlab = "Time of Day (24 hours)")
+
+hist(t$time[t$origin_metro == "outside"], breaks = "hours",
+     main = "Start Time of Trips Initiated Far From a Metro Station",
+     xlab = "Time of Day (24 hours)")
+
+```
+
+
+```{r}
+
+hist(t$duration[(t$dest_metro == "inside") & (t$duration < 20)],
+     main = "Duration of Trips Initiated Near a Metro Station",
+     xlab = "Trip Duration (in mins), under 20 mins")
+
+hist(t$duration[(t$dest_metro == "outside") & (t$duration < 20)],
+     main = "Duration of Trips Initiated Far From a Metro Station",
+     xlab = "Trip Duration (in mins), under 20 mins")
+
+```
+
+
+```{r}
+
+# Seasonal variation
+
+hist(trips$started_at, breaks = "months",
+     main = "Histogram of Trips by Date-Time",
+     xlab = "Trip Start Date and Time")
+
+```
+
+
+```{r}
+
+# Graphing the seasonal and perennial distribution of trip frequency
+
+ggplot(trips, aes(x = started_at, color = member_casual)) +
+  # geom_histogram(position = "identity", bins = 56, alpha = 0.3) +
+  geom_density(aes(y = after_stat(count)*3333333)) +
+  theme_light()
+
+ggplot(trips, aes(x = started_at, fill = member_casual)) +
+  geom_histogram(position = "identity", bins = 56, alpha = 0.3, color = "white") +
+  # geom_density() +
+  theme_light()
+```
+
+
+```
+ggplot() +  geom_point(data = t, aes(x = time, y = duration))
+```
+
+```
+growth rate column 
+(n_ride1 - n_ride0) / n_ride0 = growth rate
+```
+
+
+# Making maps
+
+```{r, warning=FALSE}
+
+# Establishing basemap
+
+set_defaults(map_service = "carto", map_type = "light") 
+
+
+# Setting map extent
+
+bb_metro <- st_as_sfc(st_bbox(metro_buff))
+bb_metro <- st_buffer(bb_metro, dist = units::set_units(1, "miles"))
+
+
+# Map of metro buffer regions
+
+ggplot() +
+  basemap_gglayer(bb_metro) +
+  scale_fill_identity() + 
+  # geom_sf(data = metro.line, aes(color = OBJECTID_1), linewidth = 2) +
+  # scale_color_manual(values = c("orangered3", "gold", "chartreuse3", "gold", "gray50")) +
+  # geom_sf(data = st_transform(trips, crs = 3857), aes(color = year(started_at)), alpha = 0.4) +
+  geom_sf(data = st_transform(metro_buff, crs = 3857), fill = NA) +
+  geom_sf(data = st_transform(metro_stop, crs = 3857), size=2) +
+  coord_sf() +
+  theme_light() +
+  theme(legend.position = "none")
+
+
+```
+
+
+# Rejected Approaches
+
+```{r}
+
+# Weekly Average Number of Trips
+
+t <- trips |>
+  st_drop_geometry() |> 
+  mutate(year = year(started_at),
+         week = week(started_at)) |>
+  group_by(origin_name, year, week) |>
+  summarise(n_trips = n()) |>
+  filter((year != 2020) & (year != 2025)) |>
+  filter(!is.na(origin_name)) |>
+  group_by(origin_name, year) |>
+  summarise(weekly_avg = mean(n_trips)) 
+
+t <- t |>
+  # filter(!is.na(origin_name)) |>
+  group_by(origin_name) |>
+  summarise(lm_rate = unname(lm(weekly_avg ~ year, data=cur_data())[[1]])[2]) |>
+  rename(NAME = origin_name) |>
+  inner_join(metro_buff, by = "NAME")
+  # ggplot() +
+  # geom_bar(aes(origin_name, weekly_avg, fill = as.factor(year)), 
+  #          stat = "identity", position = "dodge")
+
+```
+
+
+```{r, warning=FALSE}
+
+# Map of metro buffer regions
+
+t <- st_as_sf(t, crs  = 4326)
+
+ggplot() +
+  geom_sf(data = st_transform(t, crs = 3857), aes(fill = lm_rate), alpha = 0.8) +
+  scale_fill_distiller(palette = "Spectral") +
+  # geom_sf(data = st_transform(metro_stop, crs = 3857), size=2) +
+  coord_sf() +
+  theme_light()
+
+
+ggplot() +
+  basemap_gglayer(bb_metro) +
+  scale_fill_identity() + 
+  ggnewscale::new_scale_fill() +
+  geom_sf(data = st_transform(t, crs = 3857), aes(fill = lm_rate), alpha = 0.8) +
+  scale_fill_distiller(palette = "Spectral") +
+  geom_sf(data = st_transform(metro_buff, crs = 3857), fill = NA) +
+  geom_sf(data = st_transform(metro_stop, crs = 3857)) +
+  coord_sf() +
+  theme_light() +
+  theme(legend.position = "none")
+```
+
+
+# ACS Census
+
+```{r}
+
+# Importing Means of Transportation to Work survey by ACS for 2023 (the most recent)
+
+commute <- read_csv("C:/Users/jaria/Downloads/ACSDT5Y2023.B08301_2025-04-25T114226/ACSDT5Y2023.B08301-Data.csv")
+
+commute <- commute |>
+  dplyr::select(
+    "geo_id" = GEO_ID, 
+    "total" = B08301_001E, 
+    "total_err" = B08301_001M,  
+    "car" = B08301_002E, 
+    "car_err" = B08301_002M, 
+    "public" = B08301_010E, 
+    "public_err" = B08301_010M, 
+    "bike" = B08301_018E, 
+    "bike_err" = B08301_018M, 
+    "home" = B08301_021E, 
+    "home_err" = B08301_021M
+  )
+
+
+# Importing census block-group boundaries and merging with commute data
+
+blocks <- st_read("C:/Users/jaria/Downloads/Maryland_Census_Boundaries_-_Census_Block_Groups_2020/Maryland_Census_Boundaries_-_Census_Block_Groups_2020.shp")
+
+blocks <- blocks |>
+  dplyr::select("geo_id" = GEOID20) |>
+  mutate(geo_id = gsub("^*", "1500000US", geo_id)) |>
+  right_join(commute, by = "geo_id")
+
+```
+
+
+```{r}
+
+# Means of Transportation (2023) Choropleth 
+
+blocks |>
+  mutate(total = as.numeric(total),
+         home = as.numeric(home),
+         car = as.numeric(car),
+         public = as.numeric(public),
+         bike = as.numeric(bike)) |>
+  mutate(total = total - home) |>
+  mutate(car_prop = car/total,
+         public_prop = public/total,
+         bike_prop = bike/total) |>
+  st_crop(st_transform(bb_metro, crs = 3857)) |>
+  ggplot() +
+  geom_sf(aes(fill = car_prop), color = "white") +
+  scale_fill_distiller(palette = "GnBu") +
+  geom_sf(data = metro_buff, fill = "white", color = "black", alpha = 0.5) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+# Importing Means of Transportation to Work survey by ACS for 2022
+
+commute22 <- read_csv("C:/Users/jaria/Downloads/ACSDT5Y2022.B08301_2025-04-25T114444/ACSDT5Y2022.B08301-Data.csv")
+
+commute22 <- commute22 |>
+  dplyr::select(
+    "geo_id" = GEO_ID, 
+    "total" = B08301_001E, 
+    "total_err" = B08301_001M,  
+    "car" = B08301_002E, 
+    "car_err" = B08301_002M, 
+    "public" = B08301_010E, 
+    "public_err" = B08301_010M, 
+    "bike" = B08301_018E, 
+    "bike_err" = B08301_018M, 
+    "home" = B08301_021E, 
+    "home_err" = B08301_021M
+  )
+
+
+# Adding "22" and "23" to end of each column name to distinguish census years after joining
+
+commute22 <- rename_with(commute22, ~ gsub("$", "22", .x), -geo_id)
+
+commute23 <- rename_with(commute, ~ gsub("$", "23", .x), -geo_id)
+
+commute <- commute23 |>  full_join(commute22, by = "geo_id")
+
+```
+
+
+```{r}
+
+# Resetting blocks before joining with the extended commute data
+
+blocks <- st_read("C:/Users/jaria/Downloads/Maryland_Census_Boundaries_-_Census_Block_Groups_2020/Maryland_Census_Boundaries_-_Census_Block_Groups_2020.shp")
+
+blocks <- blocks |>
+  dplyr::select("geo_id" = GEOID20) |>
+  mutate(geo_id = gsub("^*", "1500000US", geo_id)) |>
+  right_join(commute, by = "geo_id")
+
+```
+
+
+```{r}
+
+# Means of Transportation Growth Rate (2022-2023) Choropleth 
+
+blocks |>
+  mutate_at(c('total23', 'total22', 'car23', 'car22', 'public23', 'public22', 'bike23', 'bike22', 'home22', 'home23'),
+            as.numeric) |>
+  # mutate(total23 = total23 - home23,
+  #        total22 = total22 - home22) |>
+  mutate(car23_prop = car23/total23, car22_prop = car22/total22,
+         public23_prop = public23/total23, public22_prop = public22/total22,
+         bike23_prop = bike23/total23, bike22_prop = bike22/total22,) |>
+  mutate(car_rate = (car23_prop - car22_prop) / car22_prop,
+         public_rate = (public23_prop - public22_prop) / public22_prop,
+         bike_rate = (bike23_prop - bike22_prop) / bike22_prop) |>
+  st_crop(st_transform(bb_metro, crs = 3857)) |>
+  ggplot() +
+  geom_sf(aes(fill = car_rate), color = "white") +
+  scale_fill_distiller(palette = "YlGnBu") +
+  geom_sf(data = metro_buff, fill = NA, color = "black", alpha = 0.5) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+# Next
+
+```{r}
+
+# Growth rate of annual number of trips per metro buffer region (mapped) 
+
+trip_growth <- trips |>
+  st_drop_geometry() |>
+  mutate(year = year(started_at)) |>
+  group_by(origin_name, year) |>
+  summarise(n_trips = n()) |>
+  mutate(year = as.character(year)) |>
+  mutate(year = gsub("^*", "Y", year)) |>
+  spread(key = year, value = n_trips) |>
+  filter(!is.na(origin_name)) |>
+  mutate(grow24 = (Y2024-Y2023)/Y2023,
+         grow23 = (Y2023-Y2022)/Y2022,
+         grow22 = (Y2022-Y2021)/Y2021) |>
+  as.data.frame() 
+
+trip_growth |>
+  right_join(metro_buff, by = c("origin_name" = "NAME")) |>
+  st_as_sf() |>
+  ggplot() +
+  geom_sf(aes(fill = grow24)) +
+  scale_fill_distiller(palette = "GnBu") +
+  # geom_sf_label(aes(label = origin_name), position = "dodge") +
+  coord_sf() +
+  theme_minimal()
+  
+
+# growth rate of weekly average
+# 2d-histogram / heat map between duration and time of day
+# heatmap of station to station trips
+
+```
+
+
+```{r}
+# trip_growth
+
+trips |>
+  st_drop_geometry() |>
+  mutate(month = month(started_at),
+         year = year(started_at)) |>
+  filter(month == 2) |>
+  group_by(origin_name, year) |>
+  summarise(n_trips = n()) |>
+  filter(!is.na(origin_name)) |>
+  ggplot() +
+  geom_bar(aes(x = origin_name, y = n_trips, fill = as.factor(year)), stat = "identity", position = "dodge") +
+  coord_flip()
+```
+
+
+
+```{r}
+
+# Time Series (faceted)
+
+trips |>
+  st_drop_geometry() |>
+  mutate(year = year(started_at),
+         month = month(started_at)) |>
+  group_by(origin_name, month, year) |>
+  summarise(n_trips = n()) |>
+  filter(!is.na(origin_name),
+         (year < 2025) & (year > 2020)) |>
+  ggplot() +
+  geom_line(aes(x = month, y = n_trips, color = as.factor(year))) +
+  facet_wrap(~ factor(origin_name, levels = c('Shady Grove', 'Rockville', 'Twinbrook', 'White Flint', 'Grosvenor-Strathmore',
+                                              'Medical Center', 'Bethesda', 'Friendship Heights', 'Glenmont', 'Wheaton',
+                                              'Forest Glen', 'Silver Spring', 'Takoma')), 
+             scales = "free", nrow = 2, ncol = 8) +
+  theme_minimal()
+
+```
+
+```{r}
+
+# Time Series (combined)
+
+trips |>
+  st_drop_geometry() |>
+  mutate(year = year(started_at),
+         month = month(started_at)) |>
+  group_by(origin_name, month, year) |>
+  summarise(n_trips = n()) |>
+  mutate(day = 1) |>
+  mutate(date = as.Date(paste(month, day, year, sep = "-"), "%m-%d-%Y")) |>
+  filter(#!is.na(origin_name),
+         (year < 2025) & (year > 2020)) |>
+  ggplot() +
+  geom_line(aes(x = date, y = n_trips, color = origin_name)) +
+  theme_minimal()
+
+```
+
+
+
+
+
+
+
