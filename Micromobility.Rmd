@@ -20,6 +20,8 @@ library(basemaps)
 
 # Importing county shapefile
 
+The following chunk will import a shapefile of all the counties in Maryland, that has been stored locally. Then, I exclude all other entries besides Montgomery County and overwrite the object named `county`. I transform the CRS to WGS84.
+
 ```{r}
 
 county <- st_read("C:/Users/jaria/Downloads/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized) (1)/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized).shp")
@@ -33,9 +35,15 @@ county <- st_transform(county, crs = 4326)
 
 # Importing Capital Bikeshare datasets
 
+The naming convention for tables in Capital Bikeshare's Index Bucket leads with the date in 'yyyymm' format. I create a vector of the years 2019 to 2025 as integers. I create a dataframe using the year vector, replicated by the number of months in a year for each year. Using arithmetic, I combine the year and month columns to achieve the 'yyyymm' format. 
+
+After previewing the files in the index bucket, I find that the data available prior to March 2020 does not include coordinate details. I adjust the scope of the project by limiting the date range to May 2020 to Feb 2025. 
+
+I store the parts of the url that stays consistent for every link, as `a` and `b`, pasting them on their respective ends with the 'yyyymm' integer between them, ultimately creating a vector named `bucket`, which has 58 character strings. I also create a vector with the same information as `bucket`, but in a file location format.
+
 ```{r}
 
-# The naming convention for tables in Capital Bikeshare's Index Bucket leads with the date in 'yyyymm' format.
+# Generating link names 
 
 q <- 2019:2025  
 df <- cbind(yy = sort(rep(x=q, 12)), mm = rep(x=1:12, length(q))) |> as.data.frame()
@@ -55,6 +63,8 @@ bucket_dir <- paste0("./data/",df,b)
 ```
 
 
+I initialize an empty file named 'data' to store the 58 zip files I intend to download. I unzip the first file to extract the csv, save it into the 'data' folder, and read the file into a dataframe named `trips`.
+
 ```{r}
 
 # dir.create("./data")
@@ -64,6 +74,11 @@ file_name <- unzip(bucket_dir[1], exdir = "./data")
 trips <- read.csv(file_name[1])
 ```
 
+
+I remove entries that lack coordinate data, then convert the `start_lng` and `start_lat` columns into spatial data, making  `trips` an sf object. Using the `county` shapefile, I remove any trips with a start location outside of the county boundaries.
+Using a for-loop, I iteratively extract each file listed in `bucket_dir`, read the csv into R, remove entries without coordinate data, convert the data into an sf object, exclude observations outside of Montgomery County, and append the results to the initiated `trips` data frame. I keep track of the progress by printing the value of `i` at the end of each loop. 
+
+I save the results as a csv in the data folder to avoid repeating the process (the for-loop is computationally expensive).
 
 ```{r}
 
@@ -110,6 +125,8 @@ rm(a,b,i,q,df,file_name)
 
 # Accessing trips.csv
 
+I access a local copy of the trips data / aggregated dataset, which is saved in the current directory. I read the csv into a dataframe and convert it into an sf object.
+
 ```{r, warning=FALSE}
 
 trips <- readr::read_csv("trips.csv")
@@ -122,6 +139,8 @@ trips <- st_as_sf(trips, coords = c("start_lng", "start_lat"), remove = FALSE, c
 
 # Correcting logical fallacies
 
+In the *Importing Capital Bikeshare datasets* section, I excluded any observations that didn't have starting coordinates. Here, I exclude any observations that don't have destination coordinates. 
+
 ```{r}
 
 # Remove trips without destination coordinates (-1,057 obs)
@@ -130,6 +149,8 @@ trips <- trips |> filter(!is.na(end_lat))
 
 ```
 
+
+I convert the columns detailing the trip's start and end time into date-time format. In this format, I am able to take the difference between these columns and create a duration estimate (in minutes). I remove observations where the trip duration exceeds 24 hours (1440 minutes).
 
 ```{r}
 
@@ -154,6 +175,10 @@ trips <- trips |> filter(duration > 0 & duration < 1440)
 
 # Getting associated metro station
 
+Importing a shapefile containing the locations of all WMATA Metro Stations, which was stored locally, I transform the CRS to WGS84 and remove stations outside of Montgomery County. From `metro_stop`, I create a half-mile buffer around each station, save it as `metro_buff`, and select only the relevant columns. 
+
+I spatially join the trip data (starting location) with the metro buffers, creating columns that either detail the metro region it overlaps or is NA -- not overlapping with any metro region.
+
 ```{r}
 
 # Retrieving shapefile
@@ -176,6 +201,8 @@ trips <- st_join(trips, metro_buff)
 ```
 
 
+I correct the vairable classes for several columns within `trips`, notably changing numeric ID columns into character classes. I also rename the columns added to `trips` from the spatial join with `metro_buff` to specify that the spatial operations were done using the trip's starting location. 
+
 ```{r}
 
 # Correcting classes and distinguishing column names
@@ -192,6 +219,8 @@ trips <- trips |>
 
 ```
 
+
+The for-loop from *Importing Capital Bikeshare datasets* excludes trips with starting locations outside of Montgomery County. Here, I exclude trips with destinations outside of Montgomery County and then do another spatial join with `metro_buff`, this time using trip destination details instead of origin details. I repeat the same clarifying name changes to the columns added from the spatial join.
 
 ```{r}
 
@@ -218,6 +247,8 @@ trips <- trips |>
 
 ```
 
+
+I create two variables that broadly classify the trip as starting and/or ending within or outside of a metro buffer region.  
 
 ```{r}
 
@@ -279,12 +310,9 @@ metro_lts <- lts |>
 # Mapping street stress in buffered regions
 
 ggplot() +
-  # basemap_gglayer(bb_metro) +
-  # scale_fill_identity() +
   geom_sf(data = st_transform(lts, crs = 3857), aes(color = LTS)) +
   geom_sf(data = st_transform(lts[lts$LTS=="High_Stress",], crs = 3857), color = "red") +
   scale_color_discrete(name = "Level of Traffic Stress", labels = c("High Stress", "Low Stress")) +
-  # geom_sf_text(data = st_transform(metro_buff, crs = 3857), aes(label = NAME), nudge_x = metro_buff$nudge_x) +
   coord_sf() +
   theme_light()
 
