@@ -264,6 +264,8 @@ trips <- trips |>
 
 # Biking Infrastructure
 
+The following chunk will import the results of the Bicycle Level of Traffic Stress (LTS) Survey by the Montgomery County Planning Department. A zipped geodatabase file will be downloaded directly from the internet, unzipped, and stored in your current directory. From there, R will read the gdb into an sf object named `bike_stress` and transformed to WGS84.
+
 ```{r}
 
 # Importing Bicycle Stress Map Survey
@@ -279,6 +281,10 @@ bike_stress <- st_transform(bike_stress, crs = 4326)
 
 ```
 
+
+The `bike_stress` object has more than one geometry type, notably including a "MULTICURVE" type, which is not supported by sf. I change the geometry into a "MULTILINESTRING" so that I could perform geometry operations on it. I trim `bike_stress` using `metro_buff` as a stencil, saving the overlapping region in an sf object names `lts`. 
+
+The LTS Survey grades streets using six levels: very low, low, moderately low, moderately high, high, and very high. I consolidate these levels into two: high and low. I calculate the length of each multilinestring, grouping them by metro buffer region and LTS grade. I rearrange the data frame to create High_Stress and Low_Stress columns, that store the calculated street lengths for each stress designation, per metro. Lastly, I determine what proportion of the total street length within a metro buffer is designated as high stress, storing it in the object `metro_lts`.  
 
 ```{r}
 
@@ -305,19 +311,24 @@ metro_lts <- lts |>
 
 ```
 
+
+I plot the portion of streets that overlap a metro buffer, coloring it according to its LTS designation. Due to the drawing order, the high stress streets are plotted underneath the low stress streets. To make it more visible, I plot the high stress streets independently in the following geom_sf layer. 
+
 ```{r}
 
 # Mapping street stress in buffered regions
 
 ggplot() +
-  geom_sf(data = st_transform(lts, crs = 3857), aes(color = LTS)) +
-  geom_sf(data = st_transform(lts[lts$LTS=="High_Stress",], crs = 3857), color = "red") +
+  geom_sf(data = lts, aes(color = LTS)) +
+  geom_sf(data = lts[lts$LTS=="High_Stress",], color = "red") +
   scale_color_discrete(name = "Level of Traffic Stress", labels = c("High Stress", "Low Stress")) +
   coord_sf() +
   theme_light()
 
 ```
 
+
+Returning to the central dataset, `trips`, I group all trips by their origin metro station and determine the total number of trips taken at each metro from 2020-2025. I join this data with the `metro_lts` data, which contains the proportion of streets that are high stress for each metro region. Excluding trips that were not initiated near a metro station, I create a scatterplot that compares the proportion of high stress streets against the total number of trips initiated per station, followed by a correlation test. The scatterplot displays two points with particularly large number of trips (Silver Spring and Bethesda). Removing these two potential outliers and performing another correlation test, I find that the relationship between PROP_LTS and N_TRIPS is not significant in either scenario. 
 
 ```{r}
 
@@ -350,8 +361,9 @@ cor.test(metro_lts$N_TRIPS[metro_lts$N_TRIPS < 20000], metro_lts$PROP_LTS[metro_
 
 
 
+# Date-time and Duration Histograms
 
-# Adding date-time details
+The following chunk produces a histogram that plots the number of trips taken from 2020 to 2025, distinguishing membership by color. The number of bins is equal to the number of months in our data's date range (May 2020 - February 2025). A density line is plotted atop the histogram after being scaled to size. 
 
 ```{r}
 
@@ -367,10 +379,33 @@ trips |>
 ```
 
 
+In the following graph, trip characteristics are assessed with respect to metro proximity. I create more descriptive labels for the graph facets, explicitly stating details about trip origin and destination. The `trips` dataset is truncated to only include trips with a duration under 20 minutes because this represents over 70% of all trips taken.
+
+```{r}
+
+
+dest_labs <- c("Destination Near Metro", "Destination Far From Metro")
+names(dest_labs) <- c("inside", "outside")
+
+origin_labs <- c("Initiated Near Metro", "Initiated Far From Metro")
+names(origin_labs) <- c("inside", "outside")
+
+ggplot() +
+  geom_histogram(data = trips[trips$duration < 20,], aes(x = duration), bins = 30) +
+  facet_grid(dest_metro ~ origin_metro, labeller = labeller(dest_metro = dest_labs, origin_metro = origin_labs)) +
+  theme_bw() +
+  labs(y = "Count", x = "Trip Duration (minutes)")
+  
+
+```
 
 
 
-# Making maps
+# Formatting basemap and labels
+
+Using the 'basemap' package, the default basemap style is set to light colored map produced by Carto. The map extent was selected to fit the metro buffers with their labels, which stretched the map laterally. Without adjustment, the map labels overlap the buffer region it names. To offset the label text, the position of each label was arranged individually.
+
+The basemap was plotted first, followed by geom_sf layers for the metro stations, their buffers, and their labels. To be plotted with the basemap, the sf objects had to transformed to the CRS 3857, which is used for web mapping.
 
 ```{r, warning=FALSE}
 
@@ -407,13 +442,9 @@ metro_buff$nudge_x[metro_buff$NAME == "Glenmont"] <- 4200
 ggplot() +
   basemap_gglayer(bb_metro) +
   scale_fill_identity() + 
-  # geom_sf(data = metro.line, aes(color = OBJECTID_1), linewidth = 2) +
-  # scale_color_manual(values = c("orangered3", "gold", "chartreuse3", "gold", "gray50")) +
-  # geom_sf(data = st_transform(trips, crs = 3857), aes(color = year(started_at)), alpha = 0.4) +
   geom_sf(data = st_transform(metro_buff, crs = 3857), fill = NA) +
   geom_sf(data = st_transform(metro_stop, crs = 3857), size=2) +
   geom_sf_text(data = st_transform(metro_buff, crs = 3857), aes(label = NAME), nudge_x = metro_buff$nudge_x) +
-  # geom_sf_text(data = st_transform(metro_buff, crs = 3857), aes(label = NAME)) +
   coord_sf() +
   theme_light() +
   theme(legend.position = "none")
@@ -424,7 +455,12 @@ ggplot() +
 
 
 
-# ACS Census
+
+# ACS Choropleth
+
+From the 2023 American Community Survey, I have downloaded the Means of Transportation to Work table for census block-groups in Montgomery County, storing it locally. Using the csv with column-metadata, I selected the most relevant columns and renamed them (from abstract names to descriptive ones), saving it as `commute`.
+
+From Maryland iMap, I downloaded a shapefile (storing it locally) with the boundaries for all of the census block-groups in Montgomery County, naming it `blocks`. To merge with the `commute` data, I alter GEOID20 (the unique identifier for each census block-group) to match the geo_id format observed in `commute`.
 
 ```{r}
 
@@ -460,6 +496,8 @@ blocks <- blocks |>
 ```
 
 
+After coercing the columns into their correct data type (numeric), I calculate the total population of commuters (excluding those who work from home) and determine the proportion of each block-group's population that uses cars. Using this metric, I create a choropleth, centering the extent over the metro regions in Montgomery County.
+
 ```{r}
 
 # Means of Transportation (2023) Choropleth 
@@ -487,8 +525,11 @@ blocks |>
 
 
 
+# Yearly Trip Counts
 
-# Next
+I group trips by origin station and year to determine the number of trips initiated at each station for the years between 2020 and 2025. After getting the yearly trip count per station, I calculate their annual averages, storing the results in `annual_trips`.
+
+To place the annual averages in their spatial context, I join `annual_trips` and `metro_buff`. I first plot the basemap using the extent determined in *Formatting basemap and labels*, which uses the function 'scale_fill_identity.' To add another geom layer that also uses a scale_fill aesthetic, I use the function 'new_scale_fill' from the 'ggnewscale' package. After distinguishing the layers that display a scale_fill aesthetic, I color the metro buffer regions according to their average annual number of trips. I finish the plot by adding the map labels. 
 
 ```{r}
 
@@ -521,6 +562,8 @@ ggplot() +
 ```
 
 
+To depict the scope of change in the annual total number of trips, I group trips by station and year, then create columns for each year with their respective annual trip count. I calculate the growth rate of consecutive years and store this information as `trip_growth`.
+
 ```{r}
 
 # Growth rate of annual number of trips per metro buffer region 
@@ -542,6 +585,8 @@ trip_growth <- trips |>
 ```
 
 
+The annual trip growth rate per station is plotted as grouped bar chart.
+
 ```{r}
 
 trip_growth |>
@@ -554,6 +599,8 @@ trip_growth |>
 
 ```
 
+
+The most recent data available at the start of this project from the Capital Bikeshare is from February 2025. To compare the trip frequency for 2025 to other years, for each station, I get the total number of trips from the month of February. The results are plotted in a grouped bar graph, where bar color denotes year.
 
 ```{r}
 
@@ -577,6 +624,8 @@ trips |>
 
 ```
 
+
+To get a time series graph for each station, I calculate the monthly total of trips for each metro. Each line is colored according to year, excluding any years without data for all 12 months. The graph facets are ordered in coordination with the stations' spatial arrangement, which can be observed in any of the previously generated maps.
 
 ```{r}
 
@@ -604,6 +653,9 @@ trips |>
 
 
 
+# Boxplots and t-tests
+
+Grouping by week, year, and membership, I get the weekly total number of trips by members and by casual users. The results are saved as `wk_member` and illustrated in a box plot. The graph is followed by a t-test, which proves to be significant.
 
 ```{r}
 
@@ -620,8 +672,6 @@ ggplot(data = wk_member, aes(x = member_casual, y = n_trips)) +
   geom_boxplot(aes(fill = member_casual)) +
   scale_fill_hue(l = 90, c = 30) +
   labs(x = "Membership Status", y = "Weekly Total Number of Trips", fill = "Membership") +
-  theme_light() +
-  # theme(legend.position = "none") 
   theme_light()
 
 
@@ -629,6 +679,8 @@ t.test(n_trips ~ member_casual, data = wk_member)
   
 ```
 
+
+Grouping by week, year, and proximity of destination to a metro region (binary), I get the weekly total number of trips that end near a station and those that end far from one. The results are saved as `wk_dest` and illustrated in a box plot. The graph is followed by a t-test, which proves to be significant.
 
 ```{r}
 
@@ -645,15 +697,15 @@ ggplot(data = wk_dest, aes(x = dest_metro, y = n_trips)) +
   geom_boxplot(aes(fill = dest_metro)) +
   scale_fill_hue(l = 90, c = 30) +
   labs(x = "Trip Destination, relative to Metro Station Radius", y = "Weekly Total Number of Trips", fill = "Destination") +
-  theme_light() +
-  # theme(legend.position = "none") 
-  theme_light()
+  theme_light() 
 
 
 t.test(n_trips ~ dest_metro, data = wk_dest)
 
 ```
 
+
+Grouping by week, year, and proximity of origin to a metro region (binary), I get the weekly total number of trips that begin near a station and those that begin far from one. The results are saved as `wk_origin` and illustrated in a box plot. The graph is followed by a t-test, which proves to be significant.
 
 ```{r}
 
@@ -670,8 +722,6 @@ ggplot(data = wk_origin, aes(x = origin_metro, y = n_trips)) +
   geom_boxplot(aes(fill = origin_metro)) +
   scale_fill_hue(l = 90, c = 30) +
   labs(x = "Trip Origin, relative to Metro Station Radius", y = "Weekly Total Number of Trips", fill = "Origin") +
-  theme_light() +
-  # theme(legend.position = "none") 
   theme_light()
 
 
@@ -680,23 +730,7 @@ t.test(n_trips ~ origin_metro, data = wk_origin)
 ```
 
 
-```{r}
 
-
-dest_labs <- c("Destination Near Metro", "Destination Far From Metro")
-names(dest_labs) <- c("inside", "outside")
-
-origin_labs <- c("Initiated Near Metro", "Initiated Far From Metro")
-names(origin_labs) <- c("inside", "outside")
-
-ggplot() +
-  geom_histogram(data = trips[trips$duration < 20,], aes(x = duration), bins = 30) +
-  facet_grid(dest_metro ~ origin_metro, labeller = labeller(dest_metro = dest_labs, origin_metro = origin_labs)) +
-  theme_bw() +
-  labs(y = "Count", x = "Trip Duration (minutes)")
-  
-
-```
 
 
 
