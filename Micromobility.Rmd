@@ -17,6 +17,21 @@ library(basemaps)
 ```
 
 
+*Data Links:*
+
+Maryland County Boundaries from Maryland's GIS Catalog
+https://data.imap.maryland.gov/datasets/maryland::maryland-physical-boundaries-county-boundaries-generalized/about
+
+WMATA Metro Stops from Maryland's GIS Catalog
+https://data.imap.maryland.gov/datasets/maryland::maryland-transit-wmata-metro-stops-1/about
+
+Means of Transportation by Block-Group (Montgomery County, MD), 2023 American Community Survey
+https://data.census.gov/table/ACSDT5Y2023.B08301?q=B08301:+Means+of+Transportation+to+Work&g=050XX00US24031$1500000
+
+Census Block-Groups from Maryland's GIS Catalog
+https://data.imap.maryland.gov/datasets/maryland::maryland-census-boundaries-census-block-groups-2020/about
+
+
 
 # Importing county shapefile
 
@@ -460,7 +475,7 @@ ggplot() +
 
 From the 2023 American Community Survey, I have downloaded the Means of Transportation to Work table for census block-groups in Montgomery County, storing it locally. Using the csv with column-metadata, I selected the most relevant columns and renamed them (from abstract names to descriptive ones), saving it as `commute`.
 
-From Maryland iMap, I downloaded a shapefile (storing it locally) with the boundaries for all of the census block-groups in Montgomery County, naming it `blocks`. To merge with the `commute` data, I alter GEOID20 (the unique identifier for each census block-group) to match the geo_id format observed in `commute`.
+From Maryland iMap, I downloaded a shapefile (storing it locally) with the boundaries for all of the census block-groups in Montgomery County, naming it `blocks`. To merge with the `commute` data, I alter GEOID20 (the unique identifier for each census block-group) to match the geo_id format observed in `commute`. 
 
 ```{r}
 
@@ -728,8 +743,6 @@ ggplot(data = wk_origin, aes(x = origin_metro, y = n_trips)) +
 t.test(n_trips ~ origin_metro, data = wk_origin)
 
 ```
-
-
 
 
 
