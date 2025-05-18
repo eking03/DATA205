@@ -41,13 +41,16 @@ county <- st_transform(county, crs = 4326)
 
 # Importing Capital Bikeshare datasets
 
+*NOTICE:*
+*The {r} was removed from all of the code chunks in this section to prevent the code from running. While this section produces the most significant dataset for this project, it downloads 58 zip files and takes over 30 minutes to compile. The output of this section has been uploaded to the data folder in the DATA205 repository on GitHub for convenience.*
+
 The naming convention for tables in Capital Bikeshare's Index Bucket leads with the date in 'yyyymm' format. I create a vector of the years 2019 to 2025 as integers. I create a dataframe using the year vector, replicated by the number of months in a year for each year. Using arithmetic, I combine the year and month columns to achieve the 'yyyymm' format. 
 
 After previewing the files in the index bucket, I find that the data available prior to March 2020 does not include coordinate details. I adjust the scope of the project by limiting the date range to May 2020 to Feb 2025. 
 
 I store the parts of the url that stays consistent for every link, as `a` and `b`, pasting them on their respective ends with the 'yyyymm' integer between them, ultimately creating a vector named `bucket`, which has 58 character strings. I also create a vector with the same information as `bucket`, but in a file location format.
 
-```{r}
+```
 
 # Generating link names 
 
@@ -71,7 +74,7 @@ bucket_dir <- paste0("./data/",df,b)
 
 I initialize an empty file named 'data' to store the 58 zip files I intend to download. I unzip the first file to extract the csv, save it into the 'data' folder, and read the file into a dataframe named `trips`.
 
-```{r}
+```
 
 # dir.create("./data")
 download.file(bucket, bucket_dir, mode = "wb")
@@ -86,7 +89,7 @@ Using a for-loop, I iteratively extract each file listed in `bucket_dir`, read t
 
 I save the results as a csv in the data folder to avoid repeating the process (the for-loop is computationally expensive).
 
-```{r}
+```
 
 # In my original approach, I iteratively unzipped and appended the monthly datasets, but that for-loop took 25 minutes to compile and it produced a dataframe with over 19 million observations. Writing the dataframe to a csv took 15 minutes. 
 
@@ -122,7 +125,7 @@ write.csv(trips,"./trips.csv", row.names = FALSE)
 ```
 
 
-```{r}
+```
 # Tidying up the environment
 rm(a,b,i,q,df,file_name)
 ```
@@ -131,9 +134,15 @@ rm(a,b,i,q,df,file_name)
 
 # Accessing trips.csv
 
-I access a local copy of the trips data / aggregated dataset, which is saved in the current directory. I read the csv into a dataframe and convert it into an sf object.
+The following chunk will access a local copy of the trips data, which has been saved in the current directory, either by compiling the above code or by accessing the pre-aggregated dataset from GitHub. I read the csv into a dataframe and convert it into an sf object.
 
 ```{r, warning=FALSE}
+
+download.file("https://github.com/eking03/DATA205/raw/refs/heads/main/data/trips.zip", "trips.zip", mode = "wb")
+unzip("trips.zip")
+
+# Please comment out the two lines above if you have decided to compile 'trips' using the original data source!
+
 
 trips <- readr::read_csv("trips.csv")
 
