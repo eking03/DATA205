@@ -17,29 +17,20 @@ library(basemaps)
 ```
 
 
-*Data Links:*
-
-Maryland County Boundaries from Maryland's GIS Catalog
-https://data.imap.maryland.gov/datasets/maryland::maryland-physical-boundaries-county-boundaries-generalized/about
-
-WMATA Metro Stops from Maryland's GIS Catalog
-https://data.imap.maryland.gov/datasets/maryland::maryland-transit-wmata-metro-stops-1/about
-
-Means of Transportation by Block-Group (Montgomery County, MD), 2023 American Community Survey
-https://data.census.gov/table/ACSDT5Y2023.B08301?q=B08301:+Means+of+Transportation+to+Work&g=050XX00US24031$1500000
-
-Census Block-Groups from Maryland's GIS Catalog
-https://data.imap.maryland.gov/datasets/maryland::maryland-census-boundaries-census-block-groups-2020/about
-
-
 
 # Importing county shapefile
 
-The following chunk will import a shapefile of all the counties in Maryland, that has been stored locally. Then, I exclude all other entries besides Montgomery County and overwrite the object named `county`. I transform the CRS to WGS84.
+The following chunk will import a zip file, 'md_counties', into your current directory. Unzipping the file into a folder of the same name, it stores a shapefile containing the boundaries of all counties in Maryland. I am importing the file from the data folder in the DATA205 repository on GitHub, but the data comes from the Maryland government's GIS catalog and can be found at the following [address](https://data.imap.maryland.gov/datasets/maryland::maryland-physical-boundaries-county-boundaries-generalized/about). 
+
+After reading the shapefile into our environment as `county`, I exclude all other entries besides Montgomery County and overwrite the object with the single entry. Lastly, I transform the CRS to WGS84.
 
 ```{r}
 
-county <- st_read("C:/Users/jaria/Downloads/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized) (1)/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized).shp")
+download.file("https://github.com/eking03/DATA205/raw/refs/heads/main/data/Maryland_Physical_Boundaries_-_County_Boundaries_(Generalized).zip", "md_counties.zip", mode = "wb")
+
+unzip("md_counties.zip", exdir = "md_counties")
+
+county <- st_read("md_counties")
 
 county <- county[county$county == "Montgomery",]
 county <- st_transform(county, crs = 4326)
@@ -190,15 +181,24 @@ trips <- trips |> filter(duration > 0 & duration < 1440)
 
 # Getting associated metro station
 
-Importing a shapefile containing the locations of all WMATA Metro Stations, which was stored locally, I transform the CRS to WGS84 and remove stations outside of Montgomery County. From `metro_stop`, I create a half-mile buffer around each station, save it as `metro_buff`, and select only the relevant columns. 
+Here, a zip file is downloaded from the data folder in the DATA205 repository on GitHub under the name 'wmata_stops', which unzips into a file of the same name in your current directory. The original data can be found in Maryland's GIS Catalog at the following [address](https://data.imap.maryland.gov/datasets/maryland::maryland-transit-wmata-metro-stops-1/about). 
+
+Accessing the shapefile containing the locations of all WMATA Metro Stations, I transform the CRS to WGS84 and remove stations outside of Montgomery County. From `metro_stop`, I create a half-mile buffer around each station, save it as `metro_buff`, and select only the relevant columns. 
 
 I spatially join the trip data (starting location) with the metro buffers, creating columns that either detail the metro region it overlaps or is NA -- not overlapping with any metro region.
 
 ```{r}
 
+# Importing data from GitHub
+
+download.file("https://github.com/eking03/DATA205/raw/refs/heads/main/data/Maryland_Transit_-_WMATA_Metro_Stops.zip", "wmata_stops.zip", mode = "wb")
+
+unzip("wmata_stops.zip", exdir = "wmata_stops")
+
+
 # Retrieving shapefile
 
-metro_stop <- st_read("C:/Users/jaria/Downloads/Maryland_Transit_-_WMATA_Metro_Stops/Maryland_Transit_-_WMATA_Metro_Stops.shp")
+metro_stop <- st_read("wmata_stops")
 metro_stop <- metro_stop |> 
   st_transform(crs = 4326) |>
   st_crop(county) |>
@@ -473,15 +473,21 @@ ggplot() +
 
 # ACS Choropleth
 
-From the 2023 American Community Survey, I have downloaded the Means of Transportation to Work table for census block-groups in Montgomery County, storing it locally. Using the csv with column-metadata, I selected the most relevant columns and renamed them (from abstract names to descriptive ones), saving it as `commute`.
+From the 2023 American Community Survey, I have uploaded a copy of the Means of Transportation to Work table for census block-groups in Montgomery County to the data folder in the DATA205 repository on GitHub. The original data can be found at the following [address](https://data.census.gov/table/ACSDT5Y2023.B08301?q=B08301:+Means+of+Transportation+to+Work&g=050XX00US24031$1500000).
 
-From Maryland iMap, I downloaded a shapefile (storing it locally) with the boundaries for all of the census block-groups in Montgomery County, naming it `blocks`. To merge with the `commute` data, I alter GEOID20 (the unique identifier for each census block-group) to match the geo_id format observed in `commute`. 
+The original dataset comes in a folder with three files, one of which, is a csv with the column-metadata for the primary table. Using this, I was able to preview the variable titles. I selected the most relevant columns and renamed them (from abstract names to descriptive ones), saving it as `commute`.
+
+From the data folder in the DATA205 repository on GitHub, I download a zip file, 'census_blocks', into the current directory with the boundaries for all census block-groups in Montgomery County and unzip it into a folder of the same name. The data is sourced from Maryland's GIS Catalog and can be found at the following [address](https://data.imap.maryland.gov/datasets/maryland::maryland-census-boundaries-census-block-groups-2020/about).
+
+After accessing the shapefile and naming it `blocks`, I merge this sf-object with the `commute` data, altering GEOID20 (the unique identifier for each census block-group) to match the geo_id format observed in `commute`. 
 
 ```{r}
 
 # Importing Means of Transportation to Work survey by ACS for 2023 (the most recent)
 
-commute <- read_csv("C:/Users/jaria/Downloads/ACSDT5Y2023.B08301_2025-04-25T114226/ACSDT5Y2023.B08301-Data.csv")
+download.file("https://raw.githubusercontent.com/eking03/DATA205/refs/heads/main/data/ACSDT5Y2023.B08301-Data.csv", "commute.csv", mode = "wb")
+
+commute <- read_csv("commute.csv")
 
 commute <- commute |>
   dplyr::select(
@@ -501,7 +507,11 @@ commute <- commute |>
 
 # Importing census block-group boundaries and merging with commute data
 
-blocks <- st_read("C:/Users/jaria/Downloads/Maryland_Census_Boundaries_-_Census_Block_Groups_2020/Maryland_Census_Boundaries_-_Census_Block_Groups_2020.shp")
+download.file("https://github.com/eking03/DATA205/raw/refs/heads/main/data/Maryland_Census_Boundaries_-_Census_Block_Groups_2020.zip", "census_blocks.zip", mode = "wb")
+
+unzip("census_blocks.zip", exdir = "census_blocks")
+
+blocks <- st_read("census_blocks")
 
 blocks <- blocks |>
   dplyr::select("geo_id" = GEOID20) |>
