@@ -16,9 +16,10 @@ library(basemaps)
 
 ```
 
+*Heads up! This document takes about 5 minutes to knit*
 
 
-# Importing county shapefile
+## Importing county shapefile
 
 The following chunk will import a zip file, 'md_counties', into your current directory. Unzipping the file into a folder of the same name, it stores a shapefile containing the boundaries of all counties in Maryland. I am importing the file from the data folder in the DATA205 repository on GitHub, but the data comes from the Maryland government's GIS catalog and can be found at the following [address](https://data.imap.maryland.gov/datasets/maryland::maryland-physical-boundaries-county-boundaries-generalized/about). 
 
@@ -39,10 +40,10 @@ county <- st_transform(county, crs = 4326)
 
 
 
-# Importing Capital Bikeshare datasets
+## Importing Capital Bikeshare datasets
 
-*NOTICE:*
-*The {r} was removed from all of the code chunks in this section to prevent the code from running. While this section produces the most significant dataset for this project, it downloads 58 zip files and takes over 30 minutes to compile. The output of this section has been uploaded to the data folder in the DATA205 repository on GitHub for convenience.*
+**NOTICE:**
+**The {r} was removed from all of the code chunks in this section to prevent the code from running. While this section produces the most significant dataset for this project, it downloads 58 zip files and takes over 30 minutes to compile. The output of this section has been uploaded to the data folder in the DATA205 repository on GitHub for convenience.**
 
 The naming convention for tables in Capital Bikeshare's Index Bucket leads with the date in 'yyyymm' format. I create a vector of the years 2019 to 2025 as integers. I create a dataframe using the year vector, replicated by the number of months in a year for each year. Using arithmetic, I combine the year and month columns to achieve the 'yyyymm' format. 
 
@@ -132,7 +133,7 @@ rm(a,b,i,q,df,file_name)
 
 
 
-# Accessing trips.csv
+## Accessing trips.csv
 
 The following chunk will access a local copy of the trips data, which has been saved in the current directory, either by compiling the above code or by accessing the pre-aggregated dataset from GitHub. I read the csv into a dataframe and convert it into an sf object.
 
@@ -152,7 +153,7 @@ trips <- st_as_sf(trips, coords = c("start_lng", "start_lat"), remove = FALSE, c
 
 
 
-# Correcting logical fallacies
+## Correcting logical fallacies
 
 In the *Importing Capital Bikeshare datasets* section, I excluded any observations that didn't have starting coordinates. Here, I exclude any observations that don't have destination coordinates. 
 
@@ -188,7 +189,7 @@ trips <- trips |> filter(duration > 0 & duration < 1440)
 
 
 
-# Getting associated metro station
+## Getting associated metro station
 
 Here, a zip file is downloaded from the data folder in the DATA205 repository on GitHub under the name 'wmata_stops', which unzips into a file of the same name in your current directory. The original data can be found in Maryland's GIS Catalog at the following [address](https://data.imap.maryland.gov/datasets/maryland::maryland-transit-wmata-metro-stops-1/about). 
 
@@ -286,7 +287,7 @@ trips <- trips |>
 
 
 
-# Biking Infrastructure
+## Biking Infrastructure
 
 The following chunk will import the results of the Bicycle Level of Traffic Stress (LTS) Survey by the Montgomery County Planning Department. A zipped geodatabase file will be downloaded directly from the internet, unzipped, and stored in your current directory. From there, R will read the gdb into an sf object named `bike_stress` and transformed to WGS84.
 
@@ -385,7 +386,7 @@ cor.test(metro_lts$N_TRIPS[metro_lts$N_TRIPS < 20000], metro_lts$PROP_LTS[metro_
 
 
 
-# Date-time and Duration Histograms
+## Date-time and Duration Histograms
 
 The following chunk produces a histogram that plots the number of trips taken from 2020 to 2025, distinguishing membership by color. The number of bins is equal to the number of months in our data's date range (May 2020 - February 2025). A density line is plotted atop the histogram after being scaled to size. 
 
@@ -425,7 +426,7 @@ ggplot() +
 
 
 
-# Formatting basemap and labels
+## Formatting basemap and labels
 
 Using the 'basemap' package, the default basemap style is set to light colored map produced by Carto. The map extent was selected to fit the metro buffers with their labels, which stretched the map laterally. Without adjustment, the map labels overlap the buffer region it names. To offset the label text, the position of each label was arranged individually.
 
@@ -480,7 +481,7 @@ ggplot() +
 
 
 
-# ACS Choropleth
+## ACS Choropleth
 
 From the 2023 American Community Survey, I have uploaded a copy of the Means of Transportation to Work table for census block-groups in Montgomery County to the data folder in the DATA205 repository on GitHub. The original data can be found at the following [address](https://data.census.gov/table/ACSDT5Y2023.B08301?q=B08301:+Means+of+Transportation+to+Work&g=050XX00US24031$1500000).
 
@@ -559,7 +560,7 @@ blocks |>
 
 
 
-# Yearly Trip Counts
+## Yearly Trip Counts
 
 I group trips by origin station and year to determine the number of trips initiated at each station for the years between 2020 and 2025. After getting the yearly trip count per station, I calculate their annual averages, storing the results in `annual_trips`.
 
@@ -687,7 +688,7 @@ trips |>
 
 
 
-# Boxplots and t-tests
+## Boxplots and t-tests
 
 Grouping by week, year, and membership, I get the weekly total number of trips by members and by casual users. The results are saved as `wk_member` and illustrated in a box plot. The graph is followed by a t-test, which proves to be significant.
 
